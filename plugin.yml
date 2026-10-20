@@ -1,0 +1,18 @@
+name: CoreSMP
+version: 1.0.0
+main: dev.eventserver.coresmp.CoreSMP
+api-version: "1.21"
+description: Every player gets a Core. Lose it and be cursed, destroy it and go hardcore.
+commands:
+  core:
+    description: Manage player cores
+    usage: /core <players> | set <item> <players> | reroll <players> | clear <players> | status [players] | reload
+    permission: core.admin
+  status:
+    description: Set a player's status (normal, cursed or hrdcr)
+    usage: /status <normal|cursed|hrdcr> <players>
+    permission: core.admin
+permissions:
+  core.admin:
+    description: Use /core
+    default: op

@@ -1,0 +1,86 @@
+# Seconds the core may be out of the owner's inventory before the curse hits
+grace-seconds: 5
+
+# Announce curses and destroyed cores to the whole server
+broadcast: true
+
+# When a hardcore player dies, lightning strikes their death spot and they are kicked.
+# false = harmless visual lightning, true = real lightning (can set fires, burns items)
+hardcore-lightning-real: false
+# Delay before the kick, in ticks (20 ticks = 1 second)
+hardcore-kick-delay-ticks: 20
+# true = a kicked hardcore player is kicked again whenever they rejoin, until you run
+# /core clear or /status normal on them. Ops are never locked out. false = they can rejoin.
+hardcore-lockout: true
+
+# Beacon-deactivate sound when a core is destroyed: ALL (every player), OWNER, or NONE
+core-destroyed-sound: ALL
+
+# What happens when a player dies carrying their core.
+# The core has Curse of Vanishing, so it would vanish on death.
+#   HARDCORE = it counts as destroyed (player becomes hardcore)
+#   KEEP     = the core comes back with them when they respawn
+#   NOTHING  = it vanishes and they get the curse after the grace time
+death-with-core: HARDCORE
+
+# /core reroll <players> picks one outcome per player using these weights:
+#   normal   = core in their inventory
+#   cursed   = no core at all, and they are cursed
+#   hardcore = no core at all, and they are hardcore
+randomize:
+  normal: 40
+  cursed: 30
+  hardcore: 30
+
+# Nametag colours (tab list, chat and above the head).
+# Any Minecraft colour name: green, red, black, dark_red, gold, aqua, ...
+colors:
+  normal: green
+  cursed: red
+  hardcore: black
+
+# Random curse settings (potion effects that last until the core returns)
+curse:
+  # allowed: weakness, blindness, slowness, mining_fatigue, nausea, hunger, poison, darkness, unluck
+  effects:
+    - weakness
+    - blindness
+    - slowness
+    - mining_fatigue
+    - nausea
+    - hunger
+    - darkness
+    - unluck
+  min-effects: 1
+  max-effects: 2
+  # 1 means levels I and II can roll, 0 means only level I
+  max-amplifier: 1
+
+# Items that can NOT be rolled as a random core.
+# (/core set <item> can still use them, except air)
+blacklist:
+  - BARRIER
+  - LIGHT
+  - STRUCTURE_VOID
+  - STRUCTURE_BLOCK
+  - JIGSAW
+  - COMMAND_BLOCK
+  - CHAIN_COMMAND_BLOCK
+  - REPEATING_COMMAND_BLOCK
+  - COMMAND_BLOCK_MINECART
+  - DEBUG_STICK
+  - KNOWLEDGE_BOOK
+  - SPAWNER
+  - TRIAL_SPAWNER
+  - VAULT
+  - REINFORCED_DEEPSLATE
+  - BEDROCK
+  - END_PORTAL_FRAME
+  - PETRIFIED_OAK_SLAB
+  - FARMLAND
+  - DIRT_PATH
+  - CHORUS_PLANT
+  - BUDDING_AMETHYST
+  - FROGSPAWN
+  - TEST_BLOCK
+  - TEST_INSTANCE_BLOCK
