@@ -9,9 +9,9 @@ broadcast: true
 hardcore-lightning-real: false
 # Delay before the kick, in ticks (20 ticks = 1 second)
 hardcore-kick-delay-ticks: 20
-# true = a kicked hardcore player is kicked again whenever they rejoin, until you run
-# /core clear or /status normal on them. Ops are never locked out. false = they can rejoin.
-hardcore-lockout: true
+# Hardcore players are only kicked, never banned: they can rejoin right away (still hardcore).
+# Black, jolting hearts for hardcore players (hidden Wither + Regeneration, their damage/healing is cancelled)
+hardcore-black-hearts: true
 
 # Beacon-deactivate sound when a core is destroyed: ALL (every player), OWNER, or NONE
 core-destroyed-sound: ALL
@@ -27,10 +27,15 @@ death-with-core: HARDCORE
 #   normal   = core in their inventory
 #   cursed   = no core at all, and they are cursed
 #   hardcore = no core at all, and they are hardcore
+# Equal numbers = a pure 1 in 3 chance each, rolled separately for every player.
 randomize:
-  normal: 40
-  cursed: 30
-  hardcore: 30
+  normal: 1
+  cursed: 1
+  hardcore: 1
+
+# false = players with no core/status (never given one, or cleared) keep the default white name.
+# true  = they show the normal colour (green) instead.
+color-untouched-players: false
 
 # Nametag colours (tab list, chat and above the head).
 # Any Minecraft colour name: green, red, black, dark_red, gold, aqua, ...

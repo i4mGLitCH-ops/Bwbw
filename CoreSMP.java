@@ -23,6 +23,8 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityRegainHealthEvent;
 import org.bukkit.event.entity.EntityRemoveEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.ClickType;
@@ -49,6 +51,7 @@ import org.bukkit.scoreboard.Team;
 
 import java.io.File;
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -88,7 +91,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
     private final Map<UUID, Long> missingSince = new HashMap<>();
     private final Map<UUID, ItemStack> pendingCore = new HashMap<>();
     private final List<Material> pool = new ArrayList<>();
-    private final Random rng = new Random();
+    private final Random rng = new SecureRandom();
 
     private NamespacedKey keyId;
     private NamespacedKey keyOwner;
@@ -219,7 +222,58 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         return d == null ? State.NORMAL : d.state;
     }
 
+    /** Black, jolting hearts: infinite hidden Wither + Regeneration (their damage/healing is cancelled below). */
+    private void applyHardcoreLook(Player p) {
+        if (!getConfig().getBoolean("hardcore-black-hearts", true)) return;
+        PotionEffect w = p.getPotionEffect(PotionEffectType.WITHER);
+        if (w == null || !w.isInfinite()) {
+            p.addPotionEffect(new PotionEffect(PotionEffectType.WITHER, PotionEffect.INFINITE_DURATION, 0,
+                    false, false, false));
+        }
+        PotionEffect r = p.getPotionEffect(PotionEffectType.REGENERATION);
+        if (r == null || !r.isInfinite()) {
+            p.addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION, PotionEffect.INFINITE_DURATION, 0,
+                    false, false, false));
+        }
+    }
+
+    private void removeHardcoreLook(Player p) {
+        for (PotionEffectType t : new PotionEffectType[]{PotionEffectType.WITHER, PotionEffectType.REGENERATION}) {
+            PotionEffect cur = p.getPotionEffect(t);
+            if (cur != null && cur.isInfinite() && !cur.hasIcon() && !cur.hasParticles()) {
+                p.removePotionEffect(t);
+            }
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onWitherDamage(EntityDamageEvent e) {
+        if (e.getCause() == EntityDamageEvent.DamageCause.WITHER && e.getEntity() instanceof Player p
+                && stateOf(p.getUniqueId()) == State.HARDCORE) {
+            e.setCancelled(true);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onEffectRegen(EntityRegainHealthEvent e) {
+        if (e.getRegainReason() == EntityRegainHealthEvent.RegainReason.MAGIC_REGEN && e.getEntity() instanceof Player p
+                && stateOf(p.getUniqueId()) == State.HARDCORE) {
+            e.setCancelled(true);
+        }
+    }
+
     private void refreshTag(Player p) {
+        Data data0 = data.get(p.getUniqueId());
+        if (data0 == null && !getConfig().getBoolean("color-untouched-players", false)) {
+            // never touched by the plugin, or cleared: completely default name
+            teamNormal.removeEntry(p.getName());
+            teamCursed.removeEntry(p.getName());
+            teamHard.removeEntry(p.getName());
+            p.displayName(Component.text(p.getName()));
+            p.playerListName(null);
+            removeHardcoreLook(p);
+            return;
+        }
         State st = stateOf(p.getUniqueId());
         Team t;
         NamedTextColor col;
@@ -237,6 +291,8 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         Component name = Component.text(p.getName(), col);
         p.displayName(name);
         p.playerListName(name);
+        if (st == State.HARDCORE) applyHardcoreLook(p);
+        else removeHardcoreLook(p);
     }
 
     // ------------------------------------------------------------------ core item helpers
@@ -470,7 +526,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             UUID u = p.getUniqueId();
             Data d = data.get(u);
             if (d == null || p.isDead()) continue;
-            if (d.state == State.HARDCORE) continue;
+            if (d.state == State.HARDCORE) {
+                applyHardcoreLook(p);
+                continue;
+            }
             if (d.coreId == null) {
                 // cursed with no core at all: keep the curse effects on them
                 if (d.state == State.CURSED) ensureEffects(p, d);
@@ -545,9 +604,9 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         d.coreId = UUID.randomUUID();
         d.state = State.NORMAL;
 
-        int wn = Math.max(0, getConfig().getInt("randomize.normal", 40));
-        int wc = Math.max(0, getConfig().getInt("randomize.cursed", 30));
-        int wh = Math.max(0, getConfig().getInt("randomize.hardcore", 30));
+        int wn = Math.max(0, getConfig().getInt("randomize.normal", 1));
+        int wc = Math.max(0, getConfig().getInt("randomize.cursed", 1));
+        int wh = Math.max(0, getConfig().getInt("randomize.hardcore", 1));
         if (wn + wc + wh <= 0) wn = 1;
         int r = rng.nextInt(wn + wc + wh);
         State out = r < wn ? State.NORMAL : (r < wn + wc ? State.CURSED : State.HARDCORE);
@@ -833,7 +892,6 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         Player p = e.getPlayer();
         missingSince.remove(p.getUniqueId());
         refreshTag(p);
-        Bukkit.getScheduler().runTask(this, () -> checkLockout(p));
     }
 
     @EventHandler
@@ -843,16 +901,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     private void kickHardcore(Player p) {
         if (p.isOnline()) {
-            p.kick(Component.text("You died in HARDCORE mode. Your run is over.", NamedTextColor.DARK_RED));
+            p.kick(Component.text("You died in HARDCORE mode. You can rejoin.", NamedTextColor.DARK_RED));
         }
     }
 
-    /** Hardcore players who already died stay locked out (ops are exempt so they can fix things). */
-    private void checkLockout(Player p) {
-        if (!p.isOnline() || !getConfig().getBoolean("hardcore-lockout", true)) return;
-        Data d = data.get(p.getUniqueId());
-        if (d != null && d.dead && !p.hasPermission("core.admin")) kickHardcore(p);
-    }
 
     @EventHandler
     public void onDeath(PlayerDeathEvent e) {
@@ -861,8 +913,6 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         if (d == null) return;
 
         if (d.state == State.HARDCORE) {
-            d.dead = true;
-            save();
             // lightning on the exact spot where they died
             if (getConfig().getBoolean("hardcore-lightning-real", false)) {
                 p.getWorld().strikeLightning(p.getLocation());
