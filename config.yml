@@ -1,12 +1,11 @@
 # Seconds the core may be out of the owner's inventory before the curse hits
 grace-seconds: 5
 
-# Announce curses and destroyed cores to the whole server
-broadcast: true
-
 # When a hardcore player dies, lightning strikes their death spot and they are kicked.
 # false = harmless visual lightning, true = real lightning (can set fires, burns items)
 hardcore-lightning-real: false
+# Delay between the death and the lightning, in ticks (10 ticks = 0.5 seconds)
+hardcore-lightning-delay-ticks: 10
 # Delay before the kick, in ticks (20 ticks = 1 second)
 hardcore-kick-delay-ticks: 20
 # Hardcore players are only kicked, never banned: they can rejoin right away (still hardcore).
@@ -16,8 +15,12 @@ hardcore-black-hearts: true
 # Beacon-deactivate sound when a core is destroyed: ALL (every player), OWNER, or NONE
 core-destroyed-sound: ALL
 
+# true = when a non-op player logs off, they are fully reset (same as /core clear).
+# Not applied when the whole server stops or restarts.
+clear-on-logoff: true
+
 # What happens when a player dies carrying their core.
-# The core has Curse of Vanishing, so it would vanish on death.
+# The core never drops on death (it is removed from the drops).
 #   HARDCORE = it counts as destroyed (player becomes hardcore)
 #   KEEP     = the core comes back with them when they respawn
 #   NOTHING  = it vanishes and they get the curse after the grace time
@@ -56,8 +59,9 @@ curse:
     - hunger
     - darkness
     - unluck
-  min-effects: 1
-  max-effects: 2
+  # A cursed player gets exactly ONE effect. Blindness is this many percentage points
+  # less likely than an equal share (with 8 effects: 12.5% -> 7.5%). 0 = no penalty.
+  blindness-penalty: 5
   # 1 means levels I and II can roll, 0 means only level I
   max-amplifier: 1
 

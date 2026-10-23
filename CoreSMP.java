@@ -39,6 +39,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -171,6 +172,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
                 d.material = mat == null ? null : Material.matchMaterial(mat);
                 d.state = State.valueOf(sec.getString(k + ".state", "NORMAL"));
                 d.curse = new ArrayList<>(sec.getStringList(k + ".curse"));
+                if (d.curse.size() > 1) d.curse = new ArrayList<>(d.curse.subList(0, 1));
                 d.dead = sec.getBoolean(k + ".dead");
                 data.put(UUID.fromString(k), d);
             } catch (Exception ex) {
@@ -334,15 +336,9 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         m.displayName(Component.text("Core", NamedTextColor.GOLD)
                 .decoration(TextDecoration.BOLD, true)
                 .decoration(TextDecoration.ITALIC, false));
-        m.lore(List.of(
-                Component.text("Bound to " + p.getName(), NamedTextColor.GRAY)
-                        .decoration(TextDecoration.ITALIC, false),
-                Component.text("Lose it and you are cursed.", NamedTextColor.RED)
-                        .decoration(TextDecoration.ITALIC, false),
-                Component.text("Destroy it and you are doomed.", NamedTextColor.DARK_RED)
-                        .decoration(TextDecoration.ITALIC, false)));
-        m.addEnchant(Enchantment.VANISHING_CURSE, 1, true);
+        m.addEnchant(Enchantment.BINDING_CURSE, 1, true);
         m.setUnbreakable(true);
+        m.addItemFlags(ItemFlag.values()); // hide every tooltip line, only the name "Core" shows
         try {
             m.setMaxStackSize(1);
         } catch (Throwable ignored) {
@@ -404,19 +400,35 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         };
     }
 
+    /** Rolls exactly ONE curse effect. Blindness is rarer by "curse.blindness-penalty" percentage points. */
     private List<String> rollCurse() {
         List<String> names = new ArrayList<>();
         for (String s : getConfig().getStringList("curse.effects")) {
-            if (effectType(s) != null) names.add(s.toLowerCase(Locale.ROOT));
+            String k = s.toLowerCase(Locale.ROOT);
+            if (effectType(k) != null && !names.contains(k)) names.add(k);
         }
         if (names.isEmpty()) names.add("weakness");
-        int min = Math.max(1, getConfig().getInt("curse.min-effects", 1));
-        int max = Math.max(min, getConfig().getInt("curse.max-effects", 2));
-        int n = Math.min(min + rng.nextInt(max - min + 1), names.size());
+        int n = names.size();
+        int bi = names.indexOf("blindness");
+        boolean penalise = bi >= 0 && n > 1;
+        double equal = 1.0 / n;
+        double pBlind = penalise
+                ? Math.max(0.0, equal - getConfig().getDouble("curse.blindness-penalty", 5.0) / 100.0)
+                : equal;
+        double r = rng.nextDouble();
+        double acc = 0;
+        int pick = n - 1;
+        for (int i = 0; i < n; i++) {
+            if (penalise) acc += (i == bi) ? pBlind : (1.0 - pBlind) / (n - 1);
+            else acc += equal;
+            if (r < acc) {
+                pick = i;
+                break;
+            }
+        }
         int maxAmp = Math.max(0, getConfig().getInt("curse.max-amplifier", 1));
-        Collections.shuffle(names, rng);
         List<String> out = new ArrayList<>();
-        for (int i = 0; i < n; i++) out.add(names.get(i) + ":" + rng.nextInt(maxAmp + 1));
+        out.add(names.get(pick) + ":" + rng.nextInt(maxAmp + 1));
         return out;
     }
 
@@ -472,9 +484,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         save();
         ensureEffects(p, d);
         refreshTag(p);
-        p.sendMessage(Component.text("Your Core is gone! You are cursed until it returns to your inventory.",
-                NamedTextColor.RED));
-        announce(p.getName() + "'s Core was lost - they are now CURSED.", NamedTextColor.RED);
+        curseSound(p);
     }
 
     private void coreDestroyed(UUID owner, String why) {
@@ -487,14 +497,14 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         d.curse = new ArrayList<>();
         missingSince.remove(owner);
         save();
-        String name = p != null ? p.getName() : String.valueOf(Bukkit.getOfflinePlayer(owner).getName());
-        if (p != null) {
-            refreshTag(p);
-            p.sendMessage(Component.text("Your Core was destroyed (" + why + "). You are now HARDCORE.",
-                    NamedTextColor.DARK_RED));
-        }
-        announce(name + "'s Core was destroyed (" + why + ") - they are now HARDCORE.", NamedTextColor.DARK_RED);
+        if (p != null) refreshTag(p);
+        getLogger().info(Bukkit.getOfflinePlayer(owner).getName() + "'s Core was destroyed (" + why + ")");
         playDestroySound(owner);
+    }
+
+    /** Item-breaking sound, played to the player when they get cursed. */
+    private void curseSound(Player p) {
+        p.playSound(p.getLocation(), "entity.item.break", 1.0f, 1.0f);
     }
 
     private void playDestroySound(UUID owner) {
@@ -510,12 +520,6 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         }
     }
 
-    private void announce(String text, NamedTextColor color) {
-        getLogger().info(text);
-        if (getConfig().getBoolean("broadcast", true)) {
-            Bukkit.getServer().broadcast(Component.text(text, color));
-        }
-    }
 
     // ------------------------------------------------------------------ main check loop
 
@@ -542,9 +546,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
                     removeCurse(p, d);
                     d.state = State.NORMAL;
                     save();
-                    refreshTag(p);
-                    p.sendMessage(Component.text("Your Core is back. The curse is lifted.", NamedTextColor.GREEN));
-                }
+                    refreshTag(p);                }
             } else if (d.state == State.NORMAL) {
                 long since = missingSince.computeIfAbsent(u, k -> now);
                 if (now - since >= grace) applyCurse(p, d);
@@ -578,6 +580,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         save();
         refreshTag(p);
         giveStack(p, buildCore(p, d));
+        p.sendMessage(Component.text("You received your Core.", NamedTextColor.GREEN));
     }
 
     /**
@@ -618,6 +621,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             d.state = State.CURSED;
             d.coreId = null;
             ensureEffects(p, d);
+            curseSound(p);
             p.sendMessage(Component.text("You have no Core and you are cursed!", NamedTextColor.RED));
         } else {
             d.state = State.HARDCORE;
@@ -669,6 +673,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             if (d.curse.isEmpty()) d.curse = rollCurse();
             d.state = State.CURSED;
             ensureEffects(p, d);
+            curseSound(p);
             p.sendMessage(Component.text("Your status is now CURSED.", NamedTextColor.RED));
         } else {
             removeCores(p);
@@ -896,7 +901,13 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
-        missingSince.remove(e.getPlayer().getUniqueId());
+        Player p = e.getPlayer();
+        missingSince.remove(p.getUniqueId());
+        // non-op players are fully reset (same as /core clear) when they log off,
+        // but not when the whole server is shutting down/restarting
+        if (!p.isOp() && getConfig().getBoolean("clear-on-logoff", true) && !Bukkit.isStopping()) {
+            clearAll(p);
+        }
     }
 
     private void kickHardcore(Player p) {
@@ -913,12 +924,16 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         if (d == null) return;
 
         if (d.state == State.HARDCORE) {
-            // lightning on the exact spot where they died
-            if (getConfig().getBoolean("hardcore-lightning-real", false)) {
-                p.getWorld().strikeLightning(p.getLocation());
-            } else {
-                p.getWorld().strikeLightningEffect(p.getLocation());
-            }
+            // lightning on the exact spot where they died, a moment after the death
+            final org.bukkit.Location deathSpot = p.getLocation().clone();
+            long boltDelay = Math.max(0L, getConfig().getLong("hardcore-lightning-delay-ticks", 10L));
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                if (getConfig().getBoolean("hardcore-lightning-real", false)) {
+                    deathSpot.getWorld().strikeLightning(deathSpot);
+                } else {
+                    deathSpot.getWorld().strikeLightningEffect(deathSpot);
+                }
+            }, boltDelay);
             long delay = Math.max(1L, getConfig().getLong("hardcore-kick-delay-ticks", 20L));
             Bukkit.getScheduler().runTaskLater(this, () -> kickHardcore(p), delay);
             return;
