@@ -19,12 +19,21 @@ core-destroyed-sound: ALL
 # Not applied when the whole server stops or restarts.
 clear-on-logoff: true
 
+# ---- Revive Totem (/special give revivetotem <playername>)
+# true = the revived player is set to normal and gets a fresh core (hardcore/curse lifted)
+revive-sets-normal: true
+# Seconds the beacon stays up if the revived player never steps off it (or logs off)
+revive-timeout-seconds: 300
+# How long the beacon takes to crumble away, in seconds
+crumble-seconds: 15
+
 # What happens when a player dies carrying their core.
-# The core never drops on death (it is removed from the drops).
-#   HARDCORE = it counts as destroyed (player becomes hardcore)
+#   DROP     = the core drops where they died, like any other item. They are cursed
+#              after the grace time unless they get it back (default)
+#   HARDCORE = the core vanishes and counts as destroyed (player becomes hardcore)
 #   KEEP     = the core comes back with them when they respawn
-#   NOTHING  = it vanishes and they get the curse after the grace time
-death-with-core: HARDCORE
+#   NOTHING  = the core vanishes and they get the curse after the grace time
+death-with-core: DROP
 
 # /core reroll <players> picks one outcome per player using these weights:
 #   normal   = core in their inventory

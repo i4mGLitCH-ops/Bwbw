@@ -12,6 +12,10 @@ commands:
     description: Set a player's status (normal, cursed or hrdcr)
     usage: /status <normal|cursed|hrdcr> <players>
     permission: core.admin
+  special:
+    description: Give special items
+    usage: /special give revivetotem <playername> [receiver]
+    permission: core.admin
 permissions:
   core.admin:
     description: Use /core

@@ -7,6 +7,17 @@ import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Location;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.Particle;
+import org.bukkit.SoundCategory;
+import org.bukkit.Tag;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.util.Vector;
 import org.bukkit.Sound;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -26,6 +37,10 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityRegainHealthEvent;
 import org.bukkit.event.entity.EntityRemoveEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.entity.EntityResurrectEvent;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.FurnaceBurnEvent;
@@ -96,6 +111,9 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     private NamespacedKey keyId;
     private NamespacedKey keyOwner;
+    private NamespacedKey keySpecial;
+    private NamespacedKey keyTarget;
+    private NamespacedKey keyTargetName;
     private File dataFile;
 
     private Team teamNormal, teamCursed, teamHard;
@@ -108,6 +126,9 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         saveDefaultConfig();
         keyId = new NamespacedKey(this, "core_id");
         keyOwner = new NamespacedKey(this, "core_owner");
+        keySpecial = new NamespacedKey(this, "special_item");
+        keyTarget = new NamespacedKey(this, "revive_target");
+        keyTargetName = new NamespacedKey(this, "revive_name");
         dataFile = new File(getDataFolder(), "players.yml");
         loadData();
         buildPool();
@@ -124,6 +145,11 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             statusCmd.setExecutor(this);
             statusCmd.setTabCompleter(this);
         }
+        PluginCommand specialCmd = getCommand("special");
+        if (specialCmd != null) {
+            specialCmd.setExecutor(this);
+            specialCmd.setTabCompleter(this);
+        }
         Bukkit.getScheduler().runTaskTimer(this, this::tick, 20L, 5L);
         for (Player p : Bukkit.getOnlinePlayers()) refreshTag(p);
         getLogger().info("CoreSMP enabled. Item pool: " + pool.size() + " items.");
@@ -131,6 +157,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     @Override
     public void onDisable() {
+        cleanupStructures();
         save();
     }
 
@@ -338,7 +365,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
                 .decoration(TextDecoration.ITALIC, false));
         m.addEnchant(Enchantment.BINDING_CURSE, 1, true);
         m.setUnbreakable(true);
-        m.addItemFlags(ItemFlag.values()); // hide every tooltip line, only the name "Core" shows
+        // hide every tooltip line except the enchantment (Curse of Binding stays visible)
+        for (ItemFlag flag : ItemFlag.values()) {
+            if (flag != ItemFlag.HIDE_ENCHANTS) m.addItemFlags(flag);
+        }
         try {
             m.setMaxStackSize(1);
         } catch (Throwable ignored) {
@@ -736,6 +766,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         msg(s, "/core status [players]           show core info", NamedTextColor.YELLOW);
         msg(s, "/core reload                     reload config", NamedTextColor.YELLOW);
         msg(s, "/status <normal|cursed|hrdcr> <players>   set a custom status", NamedTextColor.YELLOW);
+        msg(s, "/special give revivetotem <playername> [receiver]   special items", NamedTextColor.YELLOW);
     }
 
     private List<Player> targets(CommandSender s, String sel) {
@@ -760,6 +791,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
     @Override
     public boolean onCommand(CommandSender s, Command c, String label, String[] a) {
         if (c.getName().equalsIgnoreCase("status")) return statusCommand(s, a);
+        if (c.getName().equalsIgnoreCase("special")) return specialCommand(s, a);
         if (a.length == 0) {
             usage(s);
             return true;
@@ -872,6 +904,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
     @Override
     public List<String> onTabComplete(CommandSender s, Command c, String label, String[] a) {
         List<String> out = new ArrayList<>();
+        if (c.getName().equalsIgnoreCase("special")) return specialTab(a);
         if (c.getName().equalsIgnoreCase("status")) {
             if (a.length == 1) out.addAll(List.of("normal", "cursed", "hrdcr"));
             else if (a.length == 2) out.addAll(selectors());
@@ -942,8 +975,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         ItemStack found = findOwnCore(p, d);
         if (found == null) return;
 
+        String policy = getConfig().getString("death-with-core", "DROP").toUpperCase(Locale.ROOT);
+        if (policy.equals("DROP")) return; // the core drops on the ground like any other item
+
         e.getDrops().removeIf(this::isCore);
-        String policy = getConfig().getString("death-with-core", "HARDCORE").toUpperCase(Locale.ROOT);
         if (policy.equals("KEEP")) {
             pendingCore.put(p.getUniqueId(), found.clone());
         } else if (!policy.equals("NOTHING")) {
@@ -1077,5 +1112,370 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         if (e.getClickedBlock() != null && e.getClickedBlock().getType() == Material.COMPOSTER) {
             e.setUseInteractedBlock(Event.Result.DENY);
         }
+    }
+
+    // ================================================================== special items
+
+    private record Pos(UUID world, int x, int y, int z) {
+        static Pos of(Block b) {
+            return new Pos(b.getWorld().getUID(), b.getX(), b.getY(), b.getZ());
+        }
+    }
+
+    private static final class Ritual {
+        final UUID target;
+        final UUID activator;
+        final World world;
+        final Map<Pos, Material> blocks = new HashMap<>();
+        int cx, cz, baseY;
+        boolean crumbling;
+
+        Ritual(UUID target, UUID activator, World world) {
+            this.target = target;
+            this.activator = activator;
+            this.world = world;
+        }
+    }
+
+    private final Map<Pos, Ritual> structure = new HashMap<>();
+    private final Set<UUID> noFall = new HashSet<>();
+
+    private String specialOf(ItemStack it) {
+        if (it == null || it.getType().isAir() || !it.hasItemMeta()) return null;
+        return it.getItemMeta().getPersistentDataContainer().get(keySpecial, PersistentDataType.STRING);
+    }
+
+    private ItemStack buildReviveTotem(UUID target, String targetName) {
+        ItemStack it = new ItemStack(Material.TOTEM_OF_UNDYING);
+        ItemMeta m = it.getItemMeta();
+        m.displayName(Component.text("Revive Totem", NamedTextColor.LIGHT_PURPLE)
+                .decoration(TextDecoration.BOLD, true)
+                .decoration(TextDecoration.ITALIC, false));
+        m.setEnchantmentGlintOverride(true);
+        try {
+            m.setMaxStackSize(1);
+        } catch (Throwable ignored) {
+            // totems are already unstackable
+        }
+        PersistentDataContainer pdc = m.getPersistentDataContainer();
+        pdc.set(keySpecial, PersistentDataType.STRING, "revivetotem");
+        pdc.set(keyTarget, PersistentDataType.STRING, target.toString());
+        pdc.set(keyTargetName, PersistentDataType.STRING, targetName);
+        it.setItemMeta(m);
+        return it;
+    }
+
+    // ---- /special give revivetotem <playername> [receiver]
+
+    private boolean specialCommand(CommandSender s, String[] a) {
+        String usage = "Usage: /special give revivetotem <playername> [receiver]";
+        if (a.length < 2 || !a[0].equalsIgnoreCase("give")) {
+            msg(s, usage, NamedTextColor.RED);
+            return true;
+        }
+        if (!a[1].equalsIgnoreCase("revivetotem")) {
+            msg(s, "Unknown special item '" + a[1] + "'. Available: revivetotem", NamedTextColor.RED);
+            return true;
+        }
+        if (a.length < 3) {
+            msg(s, usage, NamedTextColor.RED);
+            return true;
+        }
+        UUID id;
+        String name;
+        Player online = Bukkit.getPlayerExact(a[2]);
+        if (online != null) {
+            id = online.getUniqueId();
+            name = online.getName();
+        } else {
+            OfflinePlayer off = Bukkit.getOfflinePlayerIfCached(a[2]);
+            if (off == null) {
+                msg(s, "'" + a[2] + "' has never joined this server.", NamedTextColor.RED);
+                return true;
+            }
+            id = off.getUniqueId();
+            name = off.getName() != null ? off.getName() : a[2];
+        }
+        List<Player> receivers;
+        if (a.length >= 4) {
+            receivers = targets(s, a[3]);
+        } else if (s instanceof Player self) {
+            receivers = List.of(self);
+        } else {
+            msg(s, "From the console, name a receiver: /special give revivetotem <playername> <receiver>",
+                    NamedTextColor.RED);
+            return true;
+        }
+        for (Player r : receivers) giveStack(r, buildReviveTotem(id, name));
+        if (!receivers.isEmpty()) msg(s, "Gave a Revive Totem for " + name + ".", NamedTextColor.GREEN);
+        return true;
+    }
+
+    private List<String> specialTab(String[] a) {
+        List<String> out = new ArrayList<>();
+        if (a.length == 1) {
+            out.add("give");
+        } else if (a.length == 2) {
+            out.add("revivetotem");
+        } else if (a.length == 3) {
+            for (OfflinePlayer op : Bukkit.getOfflinePlayers()) {
+                if (op.getName() != null) out.add(op.getName());
+            }
+        } else if (a.length == 4) {
+            out.addAll(selectors());
+        }
+        String last = a[a.length - 1].toLowerCase(Locale.ROOT);
+        out.removeIf(x -> !x.toLowerCase(Locale.ROOT).startsWith(last));
+        return out;
+    }
+
+    // ---- using the totem
+
+    @EventHandler
+    public void onTotemUse(PlayerInteractEvent e) {
+        Action act = e.getAction();
+        if (act != Action.RIGHT_CLICK_AIR && act != Action.RIGHT_CLICK_BLOCK) return;
+        ItemStack it = e.getItem();
+        if (!"revivetotem".equals(specialOf(it))) return;
+        e.setCancelled(true);
+
+        Player user = e.getPlayer();
+        PersistentDataContainer pdc = it.getItemMeta().getPersistentDataContainer();
+        String tid = pdc.get(keyTarget, PersistentDataType.STRING);
+        String tname = pdc.get(keyTargetName, PersistentDataType.STRING);
+        UUID target;
+        try {
+            target = UUID.fromString(tid);
+        } catch (Exception ex) {
+            return;
+        }
+        Player tp = Bukkit.getPlayer(target);
+        if (tp == null || !tp.isOnline() || tp.isDead()) {
+            user.sendMessage(Component.text(tname + " is not online right now.", NamedTextColor.RED));
+            return;
+        }
+        ItemStack copy = it.clone();
+        if (e.getHand() == EquipmentSlot.OFF_HAND) user.getInventory().setItemInOffHand(new ItemStack(Material.AIR));
+        else user.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
+        startRevive(user, tp, copy);
+    }
+
+    private int findGround(World w, int x, int z, int startY) {
+        int top = Math.min(w.getMaxHeight() - 8, startY + 2);
+        int bottom = Math.max(w.getMinHeight(), startY - 20);
+        for (int y = top; y >= bottom; y--) {
+            Block b = w.getBlockAt(x, y, z);
+            if (b.isPassable() || b.isLiquid() || Tag.LEAVES.isTagged(b.getType())) continue;
+            if (!w.getBlockAt(x, y + 1, z).isPassable()) continue;
+            return y;
+        }
+        return startY - 1;
+    }
+
+    private void startRevive(Player user, Player target, ItemStack totem) {
+        World w = user.getWorld();
+        Location loc = user.getLocation();
+        double yaw = Math.toRadians(loc.getYaw());
+        Ritual r = new Ritual(target.getUniqueId(), user.getUniqueId(), w);
+        r.cx = (int) Math.floor(loc.getX() - Math.sin(yaw) * 5.0);
+        r.cz = (int) Math.floor(loc.getZ() + Math.cos(yaw) * 5.0);
+        r.baseY = findGround(w, r.cx, r.cz, loc.getBlockY()) + 1;
+
+        for (int layer = 1; layer <= 4; layer++) {
+            final int k = layer;
+            Bukkit.getScheduler().runTaskLater(this, () -> placeLayer(r, k), 20L * k);
+        }
+        Bukkit.getScheduler().runTaskLater(this, () -> placeBeacon(r, totem), 100L);
+    }
+
+    private boolean setStructure(Ritual r, Block b, Material mat) {
+        Material cur = b.getType();
+        if (cur == Material.BEDROCK || cur == Material.BARRIER) return false;
+        b.setType(mat, false);
+        Pos p = Pos.of(b);
+        r.blocks.put(p, mat);
+        structure.put(p, r);
+        return true;
+    }
+
+    /** Layer 1 = 9x9, 2 = 7x7, 3 = 5x5, 4 = 3x3 (a full netherite beacon base). */
+    private void placeLayer(Ritual r, int layer) {
+        if (r.crumbling) return;
+        int h = 5 - layer;
+        int y = r.baseY + layer - 1;
+        List<Block> top = new ArrayList<>();
+        for (int dx = -h; dx <= h; dx++) {
+            for (int dz = -h; dz <= h; dz++) {
+                Block b = r.world.getBlockAt(r.cx + dx, y, r.cz + dz);
+                if (setStructure(r, b, Material.NETHERITE_BLOCK)) top.add(b);
+                if (layer == 1) {
+                    // support columns, so the pyramid never floats over a slope or hole
+                    for (int d = 1; d <= 10; d++) {
+                        Block below = r.world.getBlockAt(r.cx + dx, y - d, r.cz + dz);
+                        if (!below.isPassable() && !below.isLiquid()) break;
+                        setStructure(r, below, Material.NETHERITE_BLOCK);
+                    }
+                }
+            }
+        }
+        BlockData sand = Material.SOUL_SAND.createBlockData();
+        for (Block b : top) {
+            Location c = b.getLocation().add(0.5, 1.05, 0.5);
+            r.world.spawnParticle(Particle.SOUL, c, 2, 0.25, 0.1, 0.25, 0.02);
+            r.world.spawnParticle(Particle.BLOCK, c, 3, 0.3, 0.1, 0.3, 0.0, sand);
+        }
+        Location center = new Location(r.world, r.cx + 0.5, y + 1.0, r.cz + 0.5);
+        r.world.playSound(center, "block.netherite_block.place", SoundCategory.BLOCKS, 2.0f, 0.6f);
+    }
+
+    private void placeBeacon(Ritual r, ItemStack totem) {
+        if (r.crumbling) return;
+        Player target = Bukkit.getPlayer(r.target);
+        if (target == null || !target.isOnline() || target.isDead()) {
+            // the player left before the ritual finished: give the totem back and tear it down
+            Player user = Bukkit.getPlayer(r.activator);
+            if (user != null) {
+                giveStack(user, totem);
+                user.sendMessage(Component.text("The player left, your Revive Totem was returned.",
+                        NamedTextColor.RED));
+            }
+            startCrumble(r);
+            return;
+        }
+        Block b = r.world.getBlockAt(r.cx, r.baseY + 4, r.cz);
+        setStructure(r, b, Material.BEACON);
+        Location center = b.getLocation().add(0.5, 0.5, 0.5);
+        r.world.spawnParticle(Particle.SOUL, center.clone().add(0, 1, 0), 40, 0.4, 0.8, 0.4, 0.05);
+        r.world.playSound(center, Sound.BLOCK_BEACON_ACTIVATE, SoundCategory.BLOCKS, 4.0f, 1.0f);
+
+        // the revival itself
+        if (getConfig().getBoolean("revive-sets-normal", true)) setStatus(target, State.NORMAL);
+        if (target.getGameMode() == GameMode.SPECTATOR) target.setGameMode(GameMode.SURVIVAL);
+        target.setHealth(target.getMaxHealth());
+        target.setFoodLevel(20);
+        target.setFireTicks(0);
+
+        int tpY = Math.min(r.world.getMaxHeight() - 2, b.getY() + 100);
+        Location dest = new Location(r.world, r.cx + 0.5, tpY, r.cz + 0.5,
+                target.getLocation().getYaw(), target.getLocation().getPitch());
+        noFall.add(target.getUniqueId());
+        target.setFallDistance(0f);
+        target.teleport(dest);
+        target.setVelocity(new Vector(0, 0, 0));
+        startWatch(r);
+    }
+
+    /** Waits until the revived player is back on solid ground off the structure, then crumbles it. */
+    private void startWatch(Ritual r) {
+        final long timeout = Math.max(10L, getConfig().getLong("revive-timeout-seconds", 300L)) * 20L;
+        new BukkitRunnable() {
+            long age = 0;
+
+            @Override
+            public void run() {
+                age += 2;
+                if (r.crumbling) {
+                    cancel();
+                    return;
+                }
+                Player p = Bukkit.getPlayer(r.target);
+                if (p == null || !p.isOnline() || age >= timeout) {
+                    noFall.remove(r.target);
+                    startCrumble(r);
+                    cancel();
+                    return;
+                }
+                if (age < 10 || !p.isOnGround()) return;
+                noFall.remove(r.target); // landed, fall protection is over
+                Block under = p.getLocation().clone().subtract(0, 0.2, 0).getBlock();
+                if (structure.get(Pos.of(under)) != r) {
+                    startCrumble(r);
+                    cancel();
+                }
+            }
+        }.runTaskTimer(this, 2L, 2L);
+    }
+
+    private void startCrumble(Ritual r) {
+        if (r.crumbling) return;
+        r.crumbling = true;
+        List<Pos> list = new ArrayList<>(r.blocks.keySet());
+        Collections.shuffle(list, rng);
+        int steps = Math.max(1, getConfig().getInt("crumble-seconds", 15) * 5); // one step per 4 ticks
+        int per = Math.max(1, (int) Math.ceil(list.size() / (double) steps));
+        new BukkitRunnable() {
+            int idx = 0;
+
+            @Override
+            public void run() {
+                for (int i = 0; i < per && idx < list.size(); i++, idx++) {
+                    removeStructureBlock(r, list.get(idx));
+                }
+                if (idx >= list.size()) cancel();
+            }
+        }.runTaskTimer(this, 0L, 4L);
+    }
+
+    private void removeStructureBlock(Ritual r, Pos p) {
+        Material expected = r.blocks.remove(p);
+        structure.remove(p);
+        Block b = r.world.getBlockAt(p.x(), p.y(), p.z());
+        if (expected == null || b.getType() != expected) return; // someone changed it, leave it alone
+        r.world.spawnParticle(Particle.BLOCK, b.getLocation().add(0.5, 0.5, 0.5), 12, 0.3, 0.3, 0.3, 0.0,
+                b.getBlockData());
+        if (rng.nextInt(6) == 0) {
+            r.world.playSound(b.getLocation(), "block.netherite_block.break", SoundCategory.BLOCKS, 1.0f, 0.8f);
+        }
+        b.setType(Material.AIR, false);
+    }
+
+    private void cleanupStructures() {
+        for (Map.Entry<Pos, Ritual> en : new ArrayList<>(structure.entrySet())) {
+            Ritual r = en.getValue();
+            Pos p = en.getKey();
+            Material expected = r.blocks.get(p);
+            Block b = r.world.getBlockAt(p.x(), p.y(), p.z());
+            if (expected != null && b.getType() == expected) b.setType(Material.AIR, false);
+        }
+        structure.clear();
+    }
+
+    // ---- protection while the ritual is running
+
+    @EventHandler(ignoreCancelled = true)
+    public void onRevivedFall(EntityDamageEvent e) {
+        if (e.getCause() == EntityDamageEvent.DamageCause.FALL && e.getEntity() instanceof Player p
+                && noFall.contains(p.getUniqueId())) {
+            e.setCancelled(true);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onStructureBreak(BlockBreakEvent e) {
+        if (!structure.isEmpty() && structure.containsKey(Pos.of(e.getBlock())) && !e.getPlayer().isOp()) {
+            e.setCancelled(true);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onStructureExplode(EntityExplodeEvent e) {
+        if (!structure.isEmpty()) e.blockList().removeIf(b -> structure.containsKey(Pos.of(b)));
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onStructureBlockExplode(BlockExplodeEvent e) {
+        if (!structure.isEmpty()) e.blockList().removeIf(b -> structure.containsKey(Pos.of(b)));
+    }
+
+    /** The Revive Totem must never trigger the vanilla "cheat death" effect. */
+    @EventHandler
+    public void onTotemResurrect(EntityResurrectEvent e) {
+        if (!(e.getEntity() instanceof Player p)) return;
+        ItemStack main = p.getInventory().getItemInMainHand();
+        ItemStack off = p.getInventory().getItemInOffHand();
+        if (specialOf(main) == null && specialOf(off) == null) return;
+        boolean realTotem = (main.getType() == Material.TOTEM_OF_UNDYING && specialOf(main) == null)
+                || (off.getType() == Material.TOTEM_OF_UNDYING && specialOf(off) == null);
+        if (!realTotem) e.setCancelled(true);
     }
 }
