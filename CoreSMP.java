@@ -18,6 +18,10 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.util.Vector;
+import org.bukkit.util.BoundingBox;
+import org.bukkit.util.RayTraceResult;
+import org.bukkit.event.player.PlayerFishEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.Sound;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -767,6 +771,8 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         msg(s, "/core reload                     reload config", NamedTextColor.YELLOW);
         msg(s, "/status <normal|cursed|hrdcr> <players>   set a custom status", NamedTextColor.YELLOW);
         msg(s, "/special give revivetotem <playername> [receiver]   special items", NamedTextColor.YELLOW);
+        msg(s, "/special give corebreaker [players]                 the Core Voider rod", NamedTextColor.YELLOW);
+        msg(s, "/special give gamblersfallacy [players]             the Gambler's Fallacy mace", NamedTextColor.YELLOW);
     }
 
     private List<Player> targets(CommandSender s, String sel) {
@@ -1173,8 +1179,42 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             msg(s, usage, NamedTextColor.RED);
             return true;
         }
+        if (a[1].equalsIgnoreCase("corebreaker")) {
+            // /special give corebreaker [receiver]  -> the Core Voider fishing rod
+            List<Player> rec;
+            if (a.length >= 3) {
+                rec = targets(s, a[2]);
+            } else if (s instanceof Player self) {
+                rec = List.of(self);
+            } else {
+                msg(s, "From the console, name a receiver: /special give corebreaker <playername>",
+                        NamedTextColor.RED);
+                return true;
+            }
+            for (Player r : rec) giveStack(r, buildCoreBreaker());
+            if (!rec.isEmpty()) msg(s, "Gave a Core Voider to " + rec.size() + " player(s).", NamedTextColor.GREEN);
+            return true;
+        }
+        String norm = a[1].toLowerCase(Locale.ROOT).replace("_", "").replace("-", "");
+        if (norm.equals("gamblersfallacy") || norm.equals("gamblersfalacy")) {
+            // /special give gamblersfallacy [receiver]  -> the Gambler's Fallacy mace
+            List<Player> rec;
+            if (a.length >= 3) {
+                rec = targets(s, a[2]);
+            } else if (s instanceof Player self) {
+                rec = List.of(self);
+            } else {
+                msg(s, "From the console, name a receiver: /special give gamblersfallacy <playername>",
+                        NamedTextColor.RED);
+                return true;
+            }
+            for (Player r : rec) giveStack(r, buildGamblersFallacy());
+            if (!rec.isEmpty()) msg(s, "Gave a Gambler's Fallacy to " + rec.size() + " player(s).", NamedTextColor.GREEN);
+            return true;
+        }
         if (!a[1].equalsIgnoreCase("revivetotem")) {
-            msg(s, "Unknown special item '" + a[1] + "'. Available: revivetotem", NamedTextColor.RED);
+            msg(s, "Unknown special item '" + a[1] + "'. Available: revivetotem, corebreaker, gamblersfallacy",
+                    NamedTextColor.RED);
             return true;
         }
         if (a.length < 3) {
@@ -1216,7 +1256,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         if (a.length == 1) {
             out.add("give");
         } else if (a.length == 2) {
-            out.add("revivetotem");
+            out.addAll(List.of("revivetotem", "corebreaker", "gamblersfallacy"));
+        } else if (a.length == 3 && (a[1].equalsIgnoreCase("corebreaker")
+                || a[1].toLowerCase(Locale.ROOT).startsWith("gamblers"))) {
+            out.addAll(selectors());
         } else if (a.length == 3) {
             for (OfflinePlayer op : Bukkit.getOfflinePlayers()) {
                 if (op.getName() != null) out.add(op.getName());
@@ -1477,5 +1520,110 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         boolean realTotem = (main.getType() == Material.TOTEM_OF_UNDYING && specialOf(main) == null)
                 || (off.getType() == Material.TOTEM_OF_UNDYING && specialOf(off) == null);
         if (!realTotem) e.setCancelled(true);
+    }
+
+    // ================================================================== Core Voider (corebreaker)
+
+    private final Map<UUID, Long> breakerCooldown = new HashMap<>();
+
+    private ItemStack buildCoreBreaker() {
+        ItemStack it = new ItemStack(Material.FISHING_ROD);
+        ItemMeta m = it.getItemMeta();
+        m.displayName(Component.text("Core Voider", NamedTextColor.DARK_PURPLE)
+                .decoration(TextDecoration.BOLD, true)
+                .decoration(TextDecoration.ITALIC, false));
+        m.setUnbreakable(true);
+        m.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+        m.getPersistentDataContainer().set(keySpecial, PersistentDataType.STRING, "corebreaker");
+        it.setItemMeta(m);
+        return it;
+    }
+
+    /** Reeling the rod back in (not casting it) while looking at a player destroys that player's core. */
+    @EventHandler
+    public void onCoreVoiderReel(PlayerFishEvent e) {
+        String st = e.getState().name();
+        if (!(st.equals("REEL_IN") || st.equals("IN_GROUND") || st.equals("FAILED_ATTEMPT")
+                || st.equals("CAUGHT_ENTITY") || st.equals("CAUGHT_FISH"))) return;
+        Player user = e.getPlayer();
+        if (!"corebreaker".equals(specialOf(user.getInventory().getItemInMainHand()))
+                && !"corebreaker".equals(specialOf(user.getInventory().getItemInOffHand()))) return;
+
+        long cd = getConfig().getLong("corebreaker-cooldown-seconds", 0L) * 1000L;
+        long now = System.currentTimeMillis();
+        Long last = breakerCooldown.get(user.getUniqueId());
+        if (cd > 0 && last != null && now - last < cd) return;
+
+        Player victim = lookedAtPlayer(user);
+        if (victim == null) return;
+        Data d = data.get(victim.getUniqueId());
+        if (d == null || d.coreId == null || d.state == State.HARDCORE) return; // nothing to destroy
+
+        breakerCooldown.put(user.getUniqueId(), now);
+        removeCores(victim);                                  // gone even from inventory / ender chest
+        coreDestroyed(victim.getUniqueId(), "Core Voider");   // hardcore + black hearts + beacon sound
+    }
+
+    /** The player the user is aiming at, with practically unlimited reach. */
+    private Player lookedAtPlayer(Player user) {
+        Location eye = user.getEyeLocation();
+        Vector origin = eye.toVector();
+        Vector dir = eye.getDirection().normalize();
+        double range = Math.max(10.0, getConfig().getDouble("corebreaker-range", 5000.0));
+        boolean walls = getConfig().getBoolean("corebreaker-through-walls", false);
+        Player best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Player p : user.getWorld().getPlayers()) {
+            if (p.equals(user) || p.isDead() || p.getGameMode() == GameMode.SPECTATOR) continue;
+            double d = eye.distance(p.getLocation());
+            // a little aiming tolerance that grows with distance, so far-away players are still hittable
+            BoundingBox box = p.getBoundingBox().clone().expand(Math.min(1.5, 0.15 + d * 0.01));
+            RayTraceResult rr = box.rayTrace(origin, dir, range);
+            if (rr == null) continue;
+            double hit = rr.getHitPosition().distance(origin);
+            if (hit >= bestDist) continue;
+            if (!walls && blockedBetween(user.getWorld(), origin, dir, hit)) continue;
+            bestDist = hit;
+            best = p;
+        }
+        return best;
+    }
+
+    /** True if a solid block is between the user and the target (unloaded chunks are skipped, never loaded). */
+    private boolean blockedBetween(World w, Vector origin, Vector dir, double dist) {
+        for (double t = 0.6; t < dist - 0.6; t += 0.4) {
+            int x = (int) Math.floor(origin.getX() + dir.getX() * t);
+            int y = (int) Math.floor(origin.getY() + dir.getY() * t);
+            int z = (int) Math.floor(origin.getZ() + dir.getZ() * t);
+            if (!w.isChunkLoaded(x >> 4, z >> 4)) continue;
+            if (w.getBlockAt(x, y, z).getType().isOccluding()) return true;
+        }
+        return false;
+    }
+
+    // ================================================================== Gambler's Fallacy (mace)
+
+    private ItemStack buildGamblersFallacy() {
+        ItemStack it = new ItemStack(Material.MACE);
+        ItemMeta m = it.getItemMeta();
+        m.displayName(Component.text("Gambler's Fallacy", NamedTextColor.GOLD)
+                .decoration(TextDecoration.BOLD, true)
+                .decoration(TextDecoration.ITALIC, false));
+        m.getPersistentDataContainer().set(keySpecial, PersistentDataType.STRING, "gamblersfallacy");
+        it.setItemMeta(m);
+        return it;
+    }
+
+    /** Every hit on a CURSED player rerolls their curse and applies the new one instantly. */
+    @EventHandler(ignoreCancelled = true)
+    public void onGamblersFallacyHit(EntityDamageByEntityEvent e) {
+        if (!(e.getDamager() instanceof Player attacker) || !(e.getEntity() instanceof Player victim)) return;
+        if (!"gamblersfallacy".equals(specialOf(attacker.getInventory().getItemInMainHand()))) return;
+        Data d = data.get(victim.getUniqueId());
+        if (d == null || d.state != State.CURSED) return; // only works on cursed players
+        removeCurse(victim, d);
+        d.curse = rollCurse();
+        save();
+        ensureEffects(victim, d);
     }
 }

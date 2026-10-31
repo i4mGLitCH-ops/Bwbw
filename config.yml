@@ -27,6 +27,15 @@ revive-timeout-seconds: 300
 # How long the beacon takes to crumble away, in seconds
 crumble-seconds: 15
 
+# ---- Core Voider (/special give corebreaker)
+# How far (in blocks) the rod can reach. Practically unlimited by default.
+corebreaker-range: 5000
+# false = solid blocks between you and the player stop it (you must really see them)
+# true  = works through walls
+corebreaker-through-walls: false
+# Seconds between uses per player (0 = no cooldown)
+corebreaker-cooldown-seconds: 0
+
 # What happens when a player dies carrying their core.
 #   DROP     = the core drops where they died, like any other item. They are cursed
 #              after the grace time unless they get it back (default)
