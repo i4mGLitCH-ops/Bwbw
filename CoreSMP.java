@@ -33,6 +33,7 @@ import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Trident;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -171,11 +172,38 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         Set<String> black = new HashSet<>();
         for (String s : getConfig().getStringList("blacklist")) black.add(s.toUpperCase(Locale.ROOT));
         pool.clear();
+        black.add("MACE");
+        black.add("ELYTRA");
         for (Material m : Material.values()) {
             if (m.isLegacy() || !m.isItem() || m.isAir()) continue;
+            if (m.isBlock()) continue; // random pool = real items only; blocks still work via /core set
             if (black.contains(m.name())) continue;
             pool.add(m);
         }
+    }
+
+    /** The item a thrown trident carries (method name differs between API builds, so try both). */
+    private ItemStack tridentStack(Entity t) {
+        for (String name : new String[]{"getItemStack", "getItem"}) {
+            try {
+                Object o = t.getClass().getMethod(name).invoke(t);
+                if (o instanceof ItemStack s) return s;
+            } catch (Throwable ignored) {
+                // try next name
+            }
+        }
+        return null;
+    }
+
+    /** True if the player's own core is currently flying/stuck as a thrown trident they threw. */
+    private boolean thrownCore(Player p, Data d) {
+        for (Trident t : p.getWorld().getEntitiesByClass(Trident.class)) {
+            if (!(t.getShooter() instanceof Player sh) || !sh.getUniqueId().equals(p.getUniqueId())) continue;
+            ItemStack st = tridentStack(t);
+            String id = st == null ? null : idOf(st);
+            if (id != null && d.coreId != null && id.equals(d.coreId.toString())) return true;
+        }
+        return false;
     }
 
     private Material randomMaterial() {
@@ -259,12 +287,14 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
     private void applyHardcoreLook(Player p) {
         if (!getConfig().getBoolean("hardcore-black-hearts", true)) return;
         PotionEffect w = p.getPotionEffect(PotionEffectType.WITHER);
-        if (w == null || !w.isInfinite()) {
+        if (w == null || !w.isInfinite() || w.hasIcon() || w.hasParticles() || w.isAmbient()) {
+            p.removePotionEffect(PotionEffectType.WITHER);
             p.addPotionEffect(new PotionEffect(PotionEffectType.WITHER, PotionEffect.INFINITE_DURATION, 0,
                     false, false, false));
         }
         PotionEffect r = p.getPotionEffect(PotionEffectType.REGENERATION);
-        if (r == null || !r.isInfinite()) {
+        if (r == null || !r.isInfinite() || r.hasIcon() || r.hasParticles() || r.isAmbient()) {
+            p.removePotionEffect(PotionEffectType.REGENERATION);
             p.addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION, PotionEffect.INFINITE_DURATION, 0,
                     false, false, false));
         }
@@ -574,7 +604,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
                 continue;
             }
 
-            if (hasCore(p, d)) {
+            if (hasCore(p, d) || thrownCore(p, d)) {
                 missingSince.remove(u);
                 if (d.state == State.CURSED) {
                     removeCurse(p, d);
@@ -1008,8 +1038,15 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     @EventHandler
     public void onItemRemoved(EntityRemoveEvent e) {
-        if (!(e.getEntity() instanceof Item item)) return;
-        ItemStack st = item.getItemStack();
+        ItemStack st;
+        if (e.getEntity() instanceof Item item) {
+            st = item.getItemStack();
+        } else if (e.getEntity() instanceof Trident tr) {
+            st = tridentStack(tr);
+            if (st == null) return;
+        } else {
+            return;
+        }
         String owner = ownerOf(st);
         String id = idOf(st);
         if (owner == null || id == null) return;
@@ -1106,16 +1143,43 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     @EventHandler(ignoreCancelled = true)
     public void onConsume(PlayerItemConsumeEvent e) {
-        if (isCore(e.getItem())) e.setCancelled(true);
+        if (!isCore(e.getItem())) return;
+        if (!getConfig().getBoolean("core-usable", true)) {
+            e.setCancelled(true);
+            return;
+        }
+        // eaten / drunk: the core is gone
+        String owner = ownerOf(e.getItem());
+        String id = idOf(e.getItem());
+        if (owner == null || id == null) return;
+        try {
+            UUID u = UUID.fromString(owner);
+            Data d = data.get(u);
+            if (d != null && d.coreId != null && id.equals(d.coreId.toString())) {
+                Bukkit.getScheduler().runTask(this, () -> coreDestroyed(u, "consumed"));
+            }
+        } catch (IllegalArgumentException ignored) {
+            // not a valid owner tag
+        }
     }
 
     @EventHandler
     public void onInteract(PlayerInteractEvent e) {
+        if (getConfig().getBoolean("core-usable", true)) return; // cores work like any other item
         Action a = e.getAction();
         if (a != Action.RIGHT_CLICK_AIR && a != Action.RIGHT_CLICK_BLOCK) return;
         if (!isCore(e.getItem())) return;
         e.setUseItemInHand(Event.Result.DENY);
         if (e.getClickedBlock() != null && e.getClickedBlock().getType() == Material.COMPOSTER) {
+            e.setUseInteractedBlock(Event.Result.DENY);
+        }
+    }
+
+    /** Composting a core would destroy it silently, so that one stays blocked. */
+    @EventHandler
+    public void onCompost(PlayerInteractEvent e) {
+        if (e.getAction() != Action.RIGHT_CLICK_BLOCK || e.getClickedBlock() == null) return;
+        if (e.getClickedBlock().getType() == Material.COMPOSTER && isCore(e.getItem())) {
             e.setUseInteractedBlock(Event.Result.DENY);
         }
     }

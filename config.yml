@@ -83,9 +83,16 @@ curse:
   # 1 means levels I and II can roll, 0 means only level I
   max-amplifier: 1
 
-# Items that can NOT be rolled as a random core.
+# true = a core can be used like any normal item (throw a trident, shoot a bow, eat food...).
+# Eating/drinking it destroys it. false = cores can't be used at all.
+core-usable: true
+
+# Items that can NOT be rolled as a random core. (Blocks, MACE and ELYTRA are always excluded from
+# the random pool in code, but /core set can still give them.)
 # (/core set <item> can still use them, except air)
 blacklist:
+  - MACE
+  - ELYTRA
   - BARRIER
   - LIGHT
   - STRUCTURE_VOID
