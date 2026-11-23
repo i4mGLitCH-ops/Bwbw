@@ -9,8 +9,8 @@ commands:
     usage: /core <players> | set <item> <players> | reroll <players> | clear <players> | status [players] | reload
     permission: core.admin
   status:
-    description: Set a player's status (normal, cursed or hrdcr)
-    usage: /status <normal|cursed|hrdcr> <players>
+    description: Set a player status (normal, cursed, hrdcr or afterlife)
+    usage: /status <normal|cursed|hrdcr|afterlife> <players>
     permission: core.admin
   special:
     description: Give special items

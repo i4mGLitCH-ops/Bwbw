@@ -92,7 +92,7 @@ import java.util.UUID;
  */
 public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
-    private enum State { NORMAL, CURSED, HARDCORE }
+    private enum State { NORMAL, CURSED, HARDCORE, AFTERLIFE }
 
     private static final class Data {
         UUID coreId;
@@ -121,8 +121,8 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
     private NamespacedKey keyTargetName;
     private File dataFile;
 
-    private Team teamNormal, teamCursed, teamHard;
-    private NamedTextColor cNormal, cCursed, cHard;
+    private Team teamNormal, teamCursed, teamHard, teamAfter;
+    private NamedTextColor cNormal, cCursed, cHard, cAfter;
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -269,6 +269,8 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         teamNormal = team(sb, "core_normal", cNormal);
         teamCursed = team(sb, "core_cursed", cCursed);
         teamHard = team(sb, "core_hardcore", cHard);
+        cAfter = colorOf("afterlife", NamedTextColor.WHITE);
+        teamAfter = team(sb, "core_afterlife", cAfter);
     }
 
     private Team team(Scoreboard sb, String name, NamedTextColor c) {
@@ -300,8 +302,32 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         }
     }
 
+    /** Afterlife hearts: infinite hidden Poison. Vanilla shows green poison hearts; the resource pack makes them white. */
+    private void applyAfterlifeLook(Player p) {
+        PotionEffect w = p.getPotionEffect(PotionEffectType.POISON);
+        if (w == null || !w.isInfinite() || w.hasIcon() || w.hasParticles() || w.isAmbient()) {
+            p.removePotionEffect(PotionEffectType.POISON);
+            p.addPotionEffect(new PotionEffect(PotionEffectType.POISON, PotionEffect.INFINITE_DURATION, 0,
+                    false, false, false));
+        }
+    }
+
+    /** Puts an afterlife player into adventure mode (spectator is left alone). */
+    private void afterlifeMode(Player p) {
+        if (getConfig().getBoolean("afterlife.adventure-mode", true) && p.getGameMode() != GameMode.SPECTATOR) {
+            p.setGameMode(GameMode.ADVENTURE);
+        }
+    }
+
+    private void leaveAfterlife(Player p) {
+        if (p.getGameMode() == GameMode.ADVENTURE && getConfig().getBoolean("afterlife.adventure-mode", true)) {
+            p.setGameMode(GameMode.SURVIVAL);
+        }
+    }
+
     private void removeHardcoreLook(Player p) {
-        for (PotionEffectType t : new PotionEffectType[]{PotionEffectType.WITHER, PotionEffectType.REGENERATION}) {
+        for (PotionEffectType t : new PotionEffectType[]{PotionEffectType.WITHER, PotionEffectType.REGENERATION,
+                PotionEffectType.POISON}) {
             PotionEffect cur = p.getPotionEffect(t);
             if (cur != null && cur.isInfinite() && !cur.hasIcon() && !cur.hasParticles()) {
                 p.removePotionEffect(t);
@@ -332,6 +358,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             teamNormal.removeEntry(p.getName());
             teamCursed.removeEntry(p.getName());
             teamHard.removeEntry(p.getName());
+            teamAfter.removeEntry(p.getName());
             p.displayName(Component.text(p.getName()));
             p.playerListName(null);
             removeHardcoreLook(p);
@@ -346,6 +373,9 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         } else if (st == State.HARDCORE) {
             t = teamHard;
             col = cHard;
+        } else if (st == State.AFTERLIFE) {
+            t = teamAfter;
+            col = cAfter;
         } else {
             t = teamNormal;
             col = cNormal;
@@ -355,7 +385,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         p.displayName(name);
         p.playerListName(name);
         if (st == State.HARDCORE) applyHardcoreLook(p);
-        else removeHardcoreLook(p);
+        else if (st == State.AFTERLIFE) {
+            removeHardcoreLook(p);
+            applyAfterlifeLook(p);
+        } else removeHardcoreLook(p);
     }
 
     // ------------------------------------------------------------------ core item helpers
@@ -553,7 +586,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     private void coreDestroyed(UUID owner, String why) {
         Data d = data.get(owner);
-        if (d == null || d.state == State.HARDCORE) return;
+        if (d == null || d.state == State.HARDCORE || d.state == State.AFTERLIFE) return;
         Player p = Bukkit.getPlayer(owner);
         if (p != null) removeCurse(p, d);
         d.state = State.HARDCORE;
@@ -598,6 +631,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
                 applyHardcoreLook(p);
                 continue;
             }
+            if (d.state == State.AFTERLIFE) {
+                applyAfterlifeLook(p);
+                continue;
+            }
             if (d.coreId == null) {
                 // cursed with no core at all: keep the curse effects on them
                 if (d.state == State.CURSED) ensureEffects(p, d);
@@ -640,6 +677,11 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             removeCurse(p, d);
             d.state = State.NORMAL;
         }
+        if (d.state == State.AFTERLIFE) {
+            p.removePotionEffect(PotionEffectType.POISON);
+            leaveAfterlife(p);
+            d.state = State.NORMAL;
+        }
         missingSince.remove(u);
         save();
         refreshTag(p);
@@ -659,6 +701,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             data.put(u, d);
         }
         // wipe whatever they had before
+        if (d.state == State.AFTERLIFE) {
+            p.removePotionEffect(PotionEffectType.POISON);
+            leaveAfterlife(p);
+        }
         removeCurse(p, d);
         removeCores(p);
         if (d.dead && p.getGameMode() == GameMode.SPECTATOR) p.setGameMode(GameMode.SURVIVAL);
@@ -703,6 +749,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             case "normal" -> State.NORMAL;
             case "cursed", "curse" -> State.CURSED;
             case "hrdcr", "hardcore" -> State.HARDCORE;
+            case "afterlife", "after", "ghost" -> State.AFTERLIFE;
             default -> null;
         };
     }
@@ -716,6 +763,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             data.put(u, d);
         }
         removeCurse(p, d);
+        if (d.state == State.AFTERLIFE && st != State.AFTERLIFE) {
+            p.removePotionEffect(PotionEffectType.POISON);
+            leaveAfterlife(p);
+        }
         if (d.dead && p.getGameMode() == GameMode.SPECTATOR) p.setGameMode(GameMode.SURVIVAL);
         d.dead = false;
         missingSince.remove(u);
@@ -739,6 +790,13 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             ensureEffects(p, d);
             curseSound(p);
             p.sendMessage(Component.text("Your status is now CURSED.", NamedTextColor.RED));
+        } else if (st == State.AFTERLIFE) {
+            removeCores(p);
+            d.coreId = null;
+            d.curse = new ArrayList<>();
+            d.state = State.AFTERLIFE;
+            afterlifeMode(p);
+            p.sendMessage(Component.text("Your status is now AFTERLIFE.", NamedTextColor.WHITE));
         } else {
             removeCores(p);
             d.coreId = null;
@@ -752,12 +810,12 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
     private boolean statusCommand(CommandSender s, String[] a) {
         if (a.length < 2) {
-            msg(s, "Usage: /status <normal|cursed|hrdcr> <players>", NamedTextColor.RED);
+            msg(s, "Usage: /status <normal|cursed|hrdcr|afterlife> <players>", NamedTextColor.RED);
             return true;
         }
         State st = parseStatus(a[0]);
         if (st == null) {
-            msg(s, "Unknown status '" + a[0] + "'. Use normal, cursed or hrdcr.", NamedTextColor.RED);
+            msg(s, "Unknown status '" + a[0] + "'. Use normal, cursed, hrdcr or afterlife.", NamedTextColor.RED);
             return true;
         }
         int n = 0;
@@ -776,6 +834,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         UUID u = p.getUniqueId();
         Data d = data.remove(u);
         if (d != null) {
+            if (d.state == State.AFTERLIFE) leaveAfterlife(p);
             removeCurse(p, d);
             if (d.dead && p.getGameMode() == GameMode.SPECTATOR) p.setGameMode(GameMode.SURVIVAL);
         }
@@ -799,7 +858,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         msg(s, "/core clear <players>            remove core, curse and hardcore", NamedTextColor.YELLOW);
         msg(s, "/core status [players]           show core info", NamedTextColor.YELLOW);
         msg(s, "/core reload                     reload config", NamedTextColor.YELLOW);
-        msg(s, "/status <normal|cursed|hrdcr> <players>   set a custom status", NamedTextColor.YELLOW);
+        msg(s, "/status <normal|cursed|hrdcr|afterlife> <players>   set a custom status", NamedTextColor.YELLOW);
         msg(s, "/special give revivetotem <playername> [receiver]   special items", NamedTextColor.YELLOW);
         msg(s, "/special give corebreaker [players]                 the Core Voider rod", NamedTextColor.YELLOW);
         msg(s, "/special give gamblersfallacy [players]             the Gambler's Fallacy mace", NamedTextColor.YELLOW);
@@ -942,7 +1001,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         List<String> out = new ArrayList<>();
         if (c.getName().equalsIgnoreCase("special")) return specialTab(a);
         if (c.getName().equalsIgnoreCase("status")) {
-            if (a.length == 1) out.addAll(List.of("normal", "cursed", "hrdcr"));
+            if (a.length == 1) out.addAll(List.of("normal", "cursed", "hrdcr", "afterlife"));
             else if (a.length == 2) out.addAll(selectors());
         } else if (a.length == 1) {
             out.addAll(List.of("set", "reroll", "randomize", "clear", "status", "reload"));
@@ -966,6 +1025,20 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         Player p = e.getPlayer();
         missingSince.remove(p.getUniqueId());
         refreshTag(p);
+        if (stateOf(p.getUniqueId()) == State.AFTERLIFE) afterlifeMode(p);
+        String url = getConfig().getString("afterlife.resource-pack-url", "");
+        if (url != null && !url.isBlank()) {
+            String sha = getConfig().getString("afterlife.resource-pack-sha1", "");
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                if (!p.isOnline()) return;
+                try {
+                    if (sha == null || sha.isBlank()) p.setResourcePack(url);
+                    else p.setResourcePack(url, sha);
+                } catch (Throwable ex) {
+                    getLogger().warning("Could not send the resource pack: " + ex.getMessage());
+                }
+            }, 40L);
+        }
     }
 
     @EventHandler
@@ -987,6 +1060,52 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
 
 
     @EventHandler
+    public void onRespawn(PlayerRespawnEvent e) {
+        Player p = e.getPlayer();
+        if (stateOf(p.getUniqueId()) != State.AFTERLIFE) return;
+        Bukkit.getScheduler().runTask(this, () -> {
+            if (!p.isOnline()) return;
+            afterlifeMode(p);
+            refreshTag(p);
+        });
+    }
+
+    private Player shooterOrSelf(Entity en) {
+        if (en instanceof Player pl) return pl;
+        if (en instanceof org.bukkit.entity.Projectile pr && pr.getShooter() instanceof Player pl) return pl;
+        return null;
+    }
+
+    /** Afterlife players can't hit anyone (players, mobs, projectiles) and can't be hit by players. */
+    @EventHandler(ignoreCancelled = true, priority = org.bukkit.event.EventPriority.HIGH)
+    public void onAfterlifeHit(EntityDamageByEntityEvent e) {
+        Player attacker = shooterOrSelf(e.getDamager());
+        if (attacker != null && stateOf(attacker.getUniqueId()) == State.AFTERLIFE) {
+            e.setCancelled(true);
+            return;
+        }
+        if (e.getEntity() instanceof Player v && stateOf(v.getUniqueId()) == State.AFTERLIFE
+                && getConfig().getBoolean("afterlife.invulnerable", true)) {
+            e.setCancelled(true);
+        }
+    }
+
+    /** The hidden Poison only gives the hearts their look, it never hurts. Other damage is blocked if invulnerable. */
+    @EventHandler(ignoreCancelled = true, priority = org.bukkit.event.EventPriority.HIGH)
+    public void onAfterlifeDamage(EntityDamageEvent e) {
+        if (!(e.getEntity() instanceof Player p) || stateOf(p.getUniqueId()) != State.AFTERLIFE) return;
+        EntityDamageEvent.DamageCause c = e.getCause();
+        if (c == EntityDamageEvent.DamageCause.POISON) {
+            e.setCancelled(true);
+            return;
+        }
+        if (!getConfig().getBoolean("afterlife.invulnerable", true)) return;
+        if (c == EntityDamageEvent.DamageCause.VOID || c == EntityDamageEvent.DamageCause.KILL
+                || c == EntityDamageEvent.DamageCause.SUICIDE) return;
+        e.setCancelled(true);
+    }
+
+    @EventHandler
     public void onDeath(PlayerDeathEvent e) {
         Player p = e.getEntity();
         Data d = data.get(p.getUniqueId());
@@ -1003,6 +1122,15 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
                     deathSpot.getWorld().strikeLightningEffect(deathSpot);
                 }
             }, boltDelay);
+            if (getConfig().getBoolean("afterlife.enabled", true)) {
+                // hardcore death -> afterlife (they are still kicked; when they rejoin they are in the afterlife)
+                p.removePotionEffect(PotionEffectType.WITHER);
+                p.removePotionEffect(PotionEffectType.REGENERATION);
+                d.state = State.AFTERLIFE;
+                d.coreId = null;
+                d.curse = new ArrayList<>();
+                save();
+            }
             long delay = Math.max(1L, getConfig().getLong("hardcore-kick-delay-ticks", 20L));
             Bukkit.getScheduler().runTaskLater(this, () -> kickHardcore(p), delay);
             return;
@@ -1621,7 +1749,7 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
         Player victim = lookedAtPlayer(user);
         if (victim == null) return;
         Data d = data.get(victim.getUniqueId());
-        if (d == null || d.coreId == null || d.state == State.HARDCORE) return; // nothing to destroy
+        if (d == null || d.coreId == null || d.state == State.HARDCORE || d.state == State.AFTERLIFE) return; // nothing to destroy
 
         breakerCooldown.put(user.getUniqueId(), now);
         removeCores(victim);                                  // gone even from inventory / ender chest

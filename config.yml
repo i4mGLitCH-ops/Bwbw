@@ -64,6 +64,7 @@ colors:
   normal: green
   cursed: red
   hardcore: black
+  afterlife: white
 
 # Random curse settings (potion effects that last until the core returns)
 curse:
@@ -118,3 +119,16 @@ blacklist:
   - FROGSPAWN
   - TEST_BLOCK
   - TEST_INSTANCE_BLOCK
+
+# ---------------- Afterlife ----------------
+# A hardcore player who dies is kicked (hardcore-kick-delay-ticks) and is in the afterlife when they rejoin:
+# white hearts, white name, adventure mode, can't hit anything.
+# Set a player's status by hand with /status afterlife <players>.
+afterlife:
+  enabled: true            # false = old behaviour (hardcore death = kick, stay hardcore)
+  adventure-mode: true     # put afterlife players in adventure mode
+  invulnerable: true       # afterlife players take no damage (void and /kill still work)
+  # White hearts need the small resource pack (AfterlifeHearts.zip). Put a direct download link here
+  # and the plugin sends it to everyone who joins. sha1 is optional but recommended.
+  resource-pack-url: ""
+  resource-pack-sha1: ""
