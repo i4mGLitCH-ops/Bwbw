@@ -1,13 +1,13 @@
 # Seconds the core may be out of the owner's inventory before the curse hits
-grace-seconds: 5
+grace-seconds: 3
 
 # When a hardcore player dies, lightning strikes their death spot and they are kicked.
 # false = harmless visual lightning, true = real lightning (can set fires, burns items)
-hardcore-lightning-real: false
+hardcore-lightning-real: true
 # Delay between the death and the lightning, in ticks (10 ticks = 0.5 seconds)
 hardcore-lightning-delay-ticks: 10
 # Delay before the kick, in ticks (20 ticks = 1 second)
-hardcore-kick-delay-ticks: 20
+hardcore-kick-delay-ticks: 5
 # Hardcore players are only kicked, never banned: they can rejoin right away (still hardcore).
 # Black, jolting hearts for hardcore players (hidden Wither + Regeneration, their damage/healing is cancelled)
 hardcore-black-hearts: true
@@ -64,7 +64,7 @@ colors:
   normal: green
   cursed: red
   hardcore: black
-  afterlife: white
+  afterlife: gray
 
 # Random curse settings (potion effects that last until the core returns)
 curse:
@@ -77,7 +77,6 @@ curse:
     - nausea
     - hunger
     - darkness
-    - unluck
   # A cursed player gets exactly ONE effect. Blindness is this many percentage points
   # less likely than an equal share (with 8 effects: 12.5% -> 7.5%). 0 = no penalty.
   blindness-penalty: 5
@@ -130,5 +129,5 @@ afterlife:
   invulnerable: true       # afterlife players take no damage (void and /kill still work)
   # White hearts need the small resource pack (AfterlifeHearts.zip). Put a direct download link here
   # and the plugin sends it to everyone who joins. sha1 is optional but recommended.
-  resource-pack-url: ""
-  resource-pack-sha1: ""
+  resource-pack-url: "https://raw.githubusercontent.com/i4mGLitCH-ops/Bwbw/main/AfterlifeHearts%20(1).zip"
+  resource-pack-sha1: "998ece31d7cd12cb9106855b5e93ef0df63e6633"
