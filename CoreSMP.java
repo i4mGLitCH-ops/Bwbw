@@ -1059,17 +1059,6 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
     }
 
 
-    @EventHandler
-    public void onRespawn(PlayerRespawnEvent e) {
-        Player p = e.getPlayer();
-        if (stateOf(p.getUniqueId()) != State.AFTERLIFE) return;
-        Bukkit.getScheduler().runTask(this, () -> {
-            if (!p.isOnline()) return;
-            afterlifeMode(p);
-            refreshTag(p);
-        });
-    }
-
     private Player shooterOrSelf(Entity en) {
         if (en instanceof Player pl) return pl;
         if (en instanceof org.bukkit.entity.Projectile pr && pr.getShooter() instanceof Player pl) return pl;
@@ -1159,6 +1148,10 @@ public final class CoreSMP extends JavaPlugin implements Listener, TabExecutor {
             if (!p.isOnline()) return;
             ItemStack back = pendingCore.remove(u);
             if (back != null) giveStack(p, back);
+            if (stateOf(u) == State.AFTERLIFE) {
+                afterlifeMode(p);
+                refreshTag(p);
+            }
         });
     }
 
